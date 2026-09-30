@@ -3,7 +3,7 @@
 // @namespace    ogamex-assistant
 // @homepageURL  https://github.com/Mitjano/ogamex-assistant
 // @supportURL   https://github.com/Mitjano/ogamex-assistant/issues
-// @version      3.120.1
+// @version      3.120.2
 // @description  Asystent OGameX: obrona floty (auto-ratunek, zawroty), Fleet Save, ekspedycje, mining, złom, farma nieaktywnych. Alarmy push przez ntfy.sh (temat losowany przy instalacji — patrz panel).
 // @author       MCH
 // @copyright    2026, MCH — wszelkie prawa zastrzeżone
@@ -23,7 +23,7 @@
 
 (function() {
   "use strict";
-  const VERSION = "3.120.1";
+  const VERSION = "3.120.2";
   const HOST = location.host;
   const UNI = HOST === "athena.ogamex.net" ? "Athena" : HOST === "genesis.ogamex.net" ? "Genesis" : HOST.split(".")[0] || HOST;
   const PAGE_AT = Date.now();
