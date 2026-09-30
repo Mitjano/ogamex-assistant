@@ -24,6 +24,7 @@ i stan są przechowywane osobno dla każdego serwera.
 8. [Panel](#8-panel)
 9. [Dobre praktyki](#9-dobre-praktyki)
 10. [Rozwiązywanie problemów](#10-rozwiązywanie-problemów)
+11. [Licencja i odpowiedzialność](#licencja-i-odpowiedzialność)
 
 ---
 
@@ -176,6 +177,20 @@ i zatrzymuje się, gdy konto jest atakowane.
 | Bot nie rusza floty przy ataku | Sprawdź, czy włączony jest **Auto-ratunek ON**. W trybie Obserwator bot tylko alarmuje. |
 | Fleet Save nie startuje | Cel musi być księżycem innej pary, a flota musi stać na księżycu. Powód jest opisany w logu. |
 | Inny problem | W sekcji **Log** kliknij **Kopiuj** i przekaż treść logu. |
+
+---
+
+## Licencja i odpowiedzialność
+
+Copyright © 2026 MCH. Wszelkie prawa zastrzeżone.
+
+Oprogramowanie jest udostępniane wyłącznie do osobistego użytku na własnym koncie w grze.
+Rozpowszechnianie, publikowanie kopii i modyfikowanie kodu bez zgody autora są zabronione.
+Pełne warunki: [LICENSE](LICENSE).
+
+Oprogramowanie jest dostarczane bez gwarancji. Autor nie odpowiada za utratę floty,
+surowców ani konta. Narzędzia automatyzujące mogą naruszać regulamin gry — korzystasz
+z nich na własną odpowiedzialność.
 
 ---
 
