@@ -3,7 +3,7 @@
 // @namespace    ogamex-assistant
 // @homepageURL  https://github.com/Mitjano/ogamex-assistant
 // @supportURL   https://github.com/Mitjano/ogamex-assistant/issues
-// @version      3.121.0
+// @version      3.122.0
 // @description  Asystent OGameX: obrona floty (auto-ratunek, zawroty), Fleet Save, ekspedycje, mining, złom, farma nieaktywnych. Alarmy push przez ntfy.sh (temat losowany przy instalacji — patrz panel).
 // @author       MCH
 // @copyright    2026, MCH — wszelkie prawa zastrzeżone
@@ -23,7 +23,7 @@
 
 (function() {
   "use strict";
-  const VERSION = "3.121.0";
+  const VERSION = "3.122.0";
   const HOST = location.host;
   const UNI = HOST === "athena.ogamex.net" ? "Athena" : HOST === "genesis.ogamex.net" ? "Genesis" : HOST.split(".")[0] || HOST;
   const PAGE_AT = Date.now();
@@ -4177,7 +4177,7 @@
     DB_TTL_MS: 7 * 864e5,
     BAN_TTL_MS: 14 * 864e5,
     YIELD_TTL_MS: 30 * 864e5,
-    SWEEP_REST_MS: 15 * 6e4,
+    IDLE_REST_MS: 2 * 6e4,
     RANK_RX: /rank(?:ing)?\s*:?\s*(\d{1,3}(?:[.,  ]\d{3})+|\d+)/i,
     st() {
       return Store.get("farm", null) || {};
@@ -4260,6 +4260,9 @@
     },
     isDone(coord) {
       return this.done().some(e => e.coord === coord);
+    },
+    inFlight(s, now = Date.now()) {
+      return new Set((s.expected || []).filter(e => e.kind === "farm" && e.toKey && (e.returnAt || 0) > now).map(e => e.toKey));
     },
     markDone(coord) {
       const d = this.done();
@@ -4529,6 +4532,7 @@
         last: m.toKey,
         at: Date.now()
       });
+      Store.set("farm_sent_n", (Store.get("farm_sent_n", 0) || 0) + 1);
       Store.set("farm_restore", {
         from: m.fromKey,
         at: Date.now()
@@ -4594,10 +4598,12 @@
       }
       const db = this.db(), maxRank = CFG.farm.maxTargetRank || 0;
       const w = Object.keys(db).filter(c => this.rankOk(db[c].rank, maxRank)).length;
-      log(`[FARMA] ${st.mode === "lap" ? "okrążenie po bazie" : "pełny skan"} zakończony (${why}): ${st.scanned || 0} układów, baza ${Object.keys(db).length} nieaktywnych (${w} w limicie rankingu), czarna lista ${Object.keys(this.bans()).length}. Następny przebieg za ${Math.round(this.SWEEP_REST_MS / 6e4)} min.`, "info");
+      const sent = (Store.get("farm_sent_n", 0) || 0) - (st.sent0 || 0);
+      const rest = sent > 0 ? 0 : this.IDLE_REST_MS;
+      log(`[FARMA] ${st.mode === "lap" ? "okrążenie po bazie" : "pełny skan"} zakończony (${why}): ${st.scanned || 0} układów, ${sent} ataków, baza ${Object.keys(db).length} nieaktywnych (${w} w limicie rankingu), czarna lista ${Object.keys(this.bans()).length}. ${rest ? `Zero ataków — następny przebieg za ${Math.round(rest / 6e4)} min.` : "Następny przebieg od razu."}`, "info");
       if (st.unknownRank) log(`[FARMA] ${st.unknownRank} cel(ów) bez odczytanego rankingu — filtr ich nie ogranicza. Zrzut wiersza: [FARMA RANK DOM].`, "warn");
       this.save({
-        restUntil: Date.now() + this.SWEEP_REST_MS
+        restUntil: Date.now() + rest
       });
     },
     attack(s, lp, t, st) {
@@ -4702,7 +4708,8 @@
       const own = new Set(Object.keys(s.pairs || {}));
       const wolne = this.freeSlots(s, now);
       if (st.active) {
-        const czeka = (st.targets || []).filter(t => !this.isDone(t.coord) && !this.banned(t.coord));
+        const leci = this.inFlight(s, now);
+        const czeka = (st.targets || []).filter(t => !this.isDone(t.coord) && !this.banned(t.coord) && !leci.has(t.coord));
         if (czeka.length) {
           if (wolne <= 0) {
             const nr = this.nextReturn(s, lp.key, now);
@@ -4772,7 +4779,7 @@
             ban++;
             continue;
           }
-          if (this.isDone(e.coord)) continue;
+          if (this.isDone(e.coord) || leci.has(e.coord)) continue;
           cele.push({
             coord: e.coord,
             galaxy: e.galaxy,
@@ -4811,7 +4818,7 @@
         this.go(nx.galaxy, nx.system, "następny układ");
         return true;
       }
-      if (st.restUntil && now < st.restUntil) return false;
+      if (st.restUntil && now < st.restUntil && st.restUntil - now <= this.IDLE_REST_MS) return false;
       const lastFull = Store.get("farm_last_full", 0) || 0;
       const dbFresh = now - lastFull < Math.max(1, c.dbRefreshHours || 12) * 36e5;
       let queue = null, mode = "full";
@@ -4842,7 +4849,8 @@
         total: queue.length,
         targets: [],
         unknownRank: 0,
-        startedAt: now
+        startedAt: now,
+        sent0: Store.get("farm_sent_n", 0) || 0
       };
       this.save(st);
       log(mode === "lap" ? `[FARMA] okrążenie PO BAZIE: ${queue.length} układ(ów) ze znanymi celami${c.maxTargetRank ? ` (rank ≤ ${c.maxTargetRank})` : ""}; start z [${lp.key}] ${lp.body}, ${c.perAttack.toLocaleString("pl-PL")} × ${c.shipType} na atak.` : `[FARMA] pełny skan: ${queue.length} układów (${c.ranges}); start z [${lp.key}] ${lp.body}, ${c.perAttack.toLocaleString("pl-PL")} × ${c.shipType} na atak.`, "success");
@@ -5738,6 +5746,7 @@
           kind: m.kind,
           fromKey: m.fromKey,
           fromBody: m.fromBody,
+          toKey: m.toKey,
           total: loadedTotal,
           sentAt: Date.now(),
           flightMs: m.flightMs,
