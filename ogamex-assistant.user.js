@@ -3,7 +3,7 @@
 // @namespace    ogamex-assistant
 // @homepageURL  https://github.com/Mitjano/ogamex-assistant
 // @supportURL   https://github.com/Mitjano/ogamex-assistant/issues
-// @version      3.122.0
+// @version      3.123.0
 // @description  Asystent OGameX: obrona floty (auto-ratunek, zawroty), Fleet Save, ekspedycje, mining, złom, farma nieaktywnych. Alarmy push przez ntfy.sh (temat losowany przy instalacji — patrz panel).
 // @author       MCH
 // @copyright    2026, MCH — wszelkie prawa zastrzeżone
@@ -23,7 +23,7 @@
 
 (function() {
   "use strict";
-  const VERSION = "3.122.0";
+  const VERSION = "3.123.0";
   const HOST = location.host;
   const UNI = HOST === "athena.ogamex.net" ? "Athena" : HOST === "genesis.ogamex.net" ? "Genesis" : HOST.split(".")[0] || HOST;
   const PAGE_AT = Date.now();
@@ -91,26 +91,100 @@
       flushLog();
     });
   } catch {}
+  const RateLimit = {
+    KEY: "ogx_ratelimit",
+    get() {
+      try {
+        return JSON.parse(GM_getValue(this.KEY, "null")) || {};
+      } catch {
+        return {};
+      }
+    },
+    set(v) {
+      try {
+        GM_setValue(this.KEY, JSON.stringify(v));
+      } catch {}
+    },
+    active(now = Date.now()) {
+      return now < (this.get().until || 0);
+    },
+    leftMin(now = Date.now()) {
+      return Math.max(1, Math.ceil(((this.get().until || 0) - now) / 6e4));
+    },
+    hit(why) {
+      const now = Date.now(), r = this.get();
+      if (now < (r.until || 0)) {
+        this.set({
+          ...r,
+          until: Math.max(r.until, now + 5 * 6e4)
+        });
+        return;
+      }
+      const n = now - (r.at || 0) < 2 * 36e5 ? Math.min((r.n || 0) + 1, 3) : 1;
+      this.set({
+        until: now + n * 10 * 6e4,
+        n: n,
+        at: now,
+        why: why,
+        probeAt: now
+      });
+      log(`[LIMIT] gra odcina ruch (${why}) — bot na OBU uni nie nawiguje i nie odpytuje gry przez ${n * 10} min (jedna próba co 2 min). Każde zapytanie w trakcie bana go przedłuża.`, "error");
+      try {
+        if (!Once.said("ratelimit_push", 10 * 6e4)) Notifier.push(`Ban Cloudflare (${UNI})`, `ogamex.net odcina ruch z Twojego IP (${why}). Bot na obu uni stoi ${n * 10} min. NIE odświeżaj kart gry — każde odświeżenie przedłuża ban.`, "high", "no_entry");
+      } catch {}
+    },
+    mayProbe(now = Date.now()) {
+      const r = this.get();
+      if (now - (r.probeAt || 0) < 12e4) return false;
+      this.set({
+        ...r,
+        probeAt: now
+      });
+      return true;
+    },
+    ok() {
+      const r = this.get();
+      if (r.until) {
+        this.set({
+          ...r,
+          until: 0
+        });
+        log("[LIMIT] gra znów odpowiada — bot wraca do pracy.", "success");
+      }
+    },
+    blockNav(why) {
+      if (!this.active()) return false;
+      if (!Once.said("ratelimit_nav", 6e4)) log(`[LIMIT] nawigacja wstrzymana (${why}) — ban jeszcze ~${this.leftMin()} min.`, "warn");
+      return true;
+    },
+    onBanPage() {
+      return /rate limited|error 1015/i.test(`${document.title} ${(document.body && document.body.innerText || "").slice(0, 600)}`);
+    }
+  };
   const Nav = {
     go(url, why) {
+      if (RateLimit.blockNav(why)) return;
       try {
         Store.set("nav_last", {
           at: Date.now(),
           to: String(url),
           why: why
         });
+        GM_setValue("ogx_nav_global", Date.now());
       } catch {}
       flushLog();
       leavingPage = true;
       location.replace(url);
     },
     click(el, why) {
+      if (RateLimit.blockNav(why)) return;
       try {
         Store.set("nav_last", {
           at: Date.now(),
           to: "klik: " + why,
           why: why
         });
+        GM_setValue("ogx_nav_global", Date.now());
       } catch {}
       flushLog();
       leavingPage = true;
@@ -546,11 +620,30 @@
         ctrl.abort();
       } catch {}
     }, ms) : null;
+    const gra = /^\//.test(String(url));
+    if (gra && RateLimit.active() && !RateLimit.mayProbe()) {
+      if (t) clearTimeout(t);
+      return {
+        ok: false,
+        status: 429,
+        statusText: "ban (bot czeka)",
+        text: async () => "",
+        json: async () => null,
+        headers: {
+          get: () => null
+        },
+        url: String(url)
+      };
+    }
     try {
-      return await fetch(url, ctrl ? {
+      const r = await fetch(url, ctrl ? {
         ...opts,
         signal: ctrl.signal
       } : opts);
+      if (gra && r) {
+        if (r.status === 429) RateLimit.hit(`HTTP 429 na ${String(url).split("?")[0]}`); else if (r.ok) RateLimit.ok();
+      }
+      return r;
     } finally {
       if (t) clearTimeout(t);
     }
@@ -4178,6 +4271,8 @@
     BAN_TTL_MS: 14 * 864e5,
     YIELD_TTL_MS: 30 * 864e5,
     IDLE_REST_MS: 2 * 6e4,
+    PACE_MIN_MS: 6e3,
+    PACE_MAX_MS: 1e4,
     RANK_RX: /rank(?:ing)?\s*:?\s*(\d{1,3}(?:[.,  ]\d{3})+|\d+)/i,
     st() {
       return Store.get("farm", null) || {};
@@ -4585,6 +4680,14 @@
       const ok = await Hangar.restoreActive(mm[1]);
       if (!Once.said("farm_restore_log", 30 * 6e4)) log(ok ? `[FARMA] po ataku sesja wraca na [${best.key}] ${best.body} (tam stoi flota) — lista ruchów pilnuje bazy, nie farmy.` : `[FARMA] NIE przywróciłem sesji na [${best.key}] — lista ruchów pokazuje bazę farmy.`, ok ? "info" : "warn");
     },
+    async pace() {
+      let last = 0;
+      try {
+        last = +GM_getValue("ogx_nav_global", 0) || 0;
+      } catch {}
+      const wait = jitter(this.PACE_MIN_MS, this.PACE_MAX_MS) - (Date.now() - last);
+      if (wait > 0) await sleep(wait);
+    },
     onGalaxy(g, sy) {
       return page() === "galaxy" && new RegExp(`[?&]x=${g}(?:&|$)`).test(location.search) && new RegExp(`[?&]y=${sy}(?:&|$)`).test(location.search);
     },
@@ -4745,7 +4848,7 @@
           return false;
         }
         if (!this.onGalaxy(next.galaxy, next.system)) {
-          await sleep(jitter(800, 2500));
+          await this.pace();
           this.go(next.galaxy, next.system, st.scanned ? "następny układ" : "start przebiegu");
           return true;
         }
@@ -4814,7 +4917,7 @@
           this.finish(st, "koniec zakresów");
           return false;
         }
-        await sleep(jitter(800, 2500));
+        await this.pace();
         this.go(nx.galaxy, nx.system, "następny układ");
         return true;
       }
@@ -8010,6 +8113,12 @@
         saveCfg();
       }
     }
+  }
+  if (RateLimit.onBanPage()) {
+    RateLimit.hit("strona „Error 1015 — rate limited”");
+    setInterval(() => {
+      if (!RateLimit.active()) Nav.go("/home", "ban Cloudflare minął — wracam do gry");
+    }, jitter(3e4, 45e3));
   }
   try {
     UI.build();
